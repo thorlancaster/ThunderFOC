@@ -261,9 +261,6 @@ bool PWMSetFrequency(int frequency)
   //  NVIC_SET_PRIORITY(, 0) // TODO HIGHEST priority for FAULT
   NVIC_SET_PRIORITY(FP_INTERRUPT, 96); // Medium-high priority for FOC
 
-  // Finally, enable the FET driver ICs
-  digitalWrite(FET_EN, LOW);
-
   hasInit = true;
   return true;
 }
@@ -272,11 +269,13 @@ void PWMSetPilotTone(float amt) {
   FP_PILOT = constrain(amt, 0, 1);
 }
 
-bool PWMSetOutput(float a, float b, float c) {
-  return PWMSetOutput(a, b, c, false);
+void PWMDisable(){
+  digitalWrite(FET_EN, !FET_EN_ENABLE);
+  FOCEN = false;
 }
 
-bool PWMSetOutput(float a, float b, float c, bool useSVPWM) {
+
+bool PWMSetOutput(float a, float b, float c) {
   // Period must be set before turning on PWM
   if (FP_PERIOD == 0)
     return false;
@@ -284,13 +283,6 @@ bool PWMSetOutput(float a, float b, float c, bool useSVPWM) {
   a = constrain(a, 0.0, 1.0);
   b = constrain(b, 0.0, 1.0);
   c = constrain(c, 0.0, 1.0);
-
-  if (useSVPWM) { // TODO use alternate-reverse SVPWM to spread switching losses evenly between all FETs
-    float minVal = min(min(a, b), c);
-    a -= minVal;
-    b -= minVal;
-    c -= minVal;
-  }
 
   uint32_t halfPeriod = FP_PERIOD / 2;
 
@@ -326,6 +318,16 @@ Vector3 PWMGetPhaseCurrents() {
   return PWMGetPhaseCurrents(false);
 }
 
+// Same as getPhaseCurrents but returns values in Alpha-Beta instead of a-b-c
+Vector2 PWMGetPhaseCurrents2(bool useInstant) {
+  Vector2 rtn;
+  Vector3 current = PWMGetPhaseCurrents(useInstant);
+  rtn.x = current.x;
+  rtn.y = current.y;
+  rtn = clarke(rtn);
+  return rtn;
+}
+
 Vector3 PWMGetPhaseCurrents(bool useInstant) {
   Vector3 output;
   float a = useInstant ? (FP_ISENSE_A_RAW - FP_ISENSE_A_OFFSET) : (FP_ISENSE_A_VAL - FP_ISENSE_A_OFFSET);
@@ -348,7 +350,7 @@ Vector3 PWMGetPhaseCurrents(bool useInstant) {
 
 // TODO this is more of a smoothed median than an interquartile average, rename
 float FPInterquartileAvg(uint16_t* buffer, int len) {
-  if (len > 15) len = 15; // Otherwise bubble sort is too slow
+  if (len > 17) len = 17; // Otherwise bubble sort is too slow
   boolean bumped = true;
   for (int i = 0; i < len; i++) {
     bumped = false;
@@ -361,15 +363,19 @@ float FPInterquartileAvg(uint16_t* buffer, int len) {
         bumped = true;
       }
     }
+    if(!bumped)
+      break; // XXX is this correct?
   }
   int half = len / 2;
   int start = max(0, half - 1);
   int end = min(len - 1, half + 1);
   float rtn = 0;
+  int cnt = 0;
   for (int x = start; x <= end; x++) {
     rtn += buffer[x];
+    cnt++;
   }
-  rtn /= (end - start);
+  rtn /= cnt;
   return rtn;
 }
 
